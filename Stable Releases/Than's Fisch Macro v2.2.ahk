@@ -161,9 +161,9 @@ $p::
 	tooltip, Press "M" to Exit, %TooltipX%, %Tooltip5%, 5
 	tooltip, , , , 6
 	tooltip, Caught: %caught% / %total%, %TooltipX%, %Tooltip12%, 12
-	if(WindowWidth != 1920 || WindowHeight != 1080) {
-		MsgBox, Please FULL SCREEN (Roblox Settings -> Full Screen -> On) and also ensure your display settings (Windows Search Bar -> Display Settings -> Display Resolution -> 1920 x 1080) are correct.
-		Reload
+	aspectRatio := WindowWidth / WindowHeight
+	if (Abs(aspectRatio - (16 / 9)) > 0.01) {
+		MsgBox, 0x30, Fisch Macro, % "Your Roblox window is " WindowWidth " x " WindowHeight ", which is not a 16:9 aspect ratio.`n`nThe macro is calibrated for 16:9 (e.g. 1920x1080, 2560x1440, 3840x2160) and the bars may misalign on other ratios.`n`nFor best results put Roblox in fullscreen on a 16:9 resolution. Proceeding anyway..."
 	}
 	Reels()
 	global Timer := A_TickCount
