@@ -72,7 +72,7 @@ global RodControl := Control
 Control := StrSplit(Control, "|")
 If (Control[2]) {
 	Msgbox The control settings are outdated.`nRestored the settings to their default values.
-	IniWrite, ControlRod, Settings.ini, Fisch, Control
+	IniWrite, %ControlRod%, Settings.ini, Common, Control
 	ExitApp
 }
 If (!Control) {
