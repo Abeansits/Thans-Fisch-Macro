@@ -52,6 +52,9 @@ marker in a non-standard color, so the macro can't "see" it. To fix those:
                     like 0x7d8aa6 to match an unusual rod.
 - FishBarTolerance- how loosely to match FishBarColor (default 5). Multi-colored markers may need a
                     higher value (e.g. 25-40).
+- FishBarHeight   - how many pixels ABOVE the normal scan line to also search for the fish (default 0
+                    = single line, normal behavior). Some rods (e.g. the sword rod) draw a tall fish
+                    icon that sits higher than usual; set this to ~70 so the macro can still find it.
 
 How to find a rod's color: install AutoHotkey v1.1, right-click its tray icon -> "Window Spy", then
 hover the fish marker on the reel bar and read the hex color shown. Put that value in FishBarColor,
