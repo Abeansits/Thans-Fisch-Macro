@@ -32,4 +32,29 @@ Ensure that you have AutoHotKey v1.1 installed.
 8. Press P to run
 9. You may need to press O to reload if the tooltips arent correctly positioned to the right of the roblox screen.
 
+====================================================
+
+Screen resolution:
+
+The macro works at any 16:9 resolution (e.g. 1280x720, 1920x1080, 2560x1440, 3840x2160) in fullscreen.
+You no longer have to switch your display down to 1920x1080. Non-16:9 ratios still work but may need
+the bars re-checked, so you will get a one-time warning. Keep your Windows Display Scale at 100%.
+
+====================================================
+
+Custom rod / fish colors (Settings.ini, [Common] section):
+
+Most rods use the default colors and need no changes. Some rods (e.g. event/sword rods) draw the fish
+marker in a non-standard color, so the macro can't "see" it. To fix those:
+
+- CatchBarColor   - color of the white control bar. Leave as "Auto" for the default.
+- FishBarColor    - color of the fish marker. Leave as "Auto" for the default, or set a hex value
+                    like 0x7d8aa6 to match an unusual rod.
+- FishBarTolerance- how loosely to match FishBarColor (default 5). Multi-colored markers may need a
+                    higher value (e.g. 25-40).
+
+How to find a rod's color: install AutoHotkey v1.1, right-click its tray icon -> "Window Spy", then
+hover the fish marker on the reel bar and read the hex color shown. Put that value in FishBarColor,
+press O to reload, then P to run.
+
 [Virustotal scan of the .ahk program](https://www.virustotal.com/gui/file/c041cb7ad42291cd0d8082690c206fe3486f5b7854edecfd8ac8f39016d17fde?nocache=1)

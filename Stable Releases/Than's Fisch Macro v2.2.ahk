@@ -10,6 +10,9 @@ ControlRod := 0.05
 navigationKey := "\"
 shaketimeout := 50
 alternatecolors := False
+catchColor := "Auto"
+fishColor := "Auto"
+fishTolerance := 5
 
 ; DONT TOUCH UNLESS YOU KNOW WHAT YOU'RE DOING
 clickholdtime := 50
@@ -31,6 +34,9 @@ If !FileExist("Settings.ini") {
 	IniWrite, %navigationKey%, Settings.ini, Common, NavigationKey
 	IniWrite, %shaketimeout%, Settings.ini, Common, shakeTimeout
 	IniWrite, %alternatecolors%, Settings.ini, Common, AlternateColor
+	IniWrite, %catchColor%, Settings.ini, Common, CatchBarColor
+	IniWrite, %fishColor%, Settings.ini, Common, FishBarColor
+	IniWrite, %fishTolerance%, Settings.ini, Common, FishBarTolerance
 }
 IniRead, Control, Settings.ini, Common, Control
 If (Control = "ERROR") {
@@ -66,6 +72,21 @@ IniRead, AlternateColors, Settings.ini, Common, AlternateColor
 If (AlternateColors = "ERROR") {
 	IniWrite, %alternatecolors%, Settings.ini, Common, AlternateColor
 	AlternateColors := alternatecolors
+}
+IniRead, CatchBarColorCfg, Settings.ini, Common, CatchBarColor
+If (CatchBarColorCfg = "ERROR") {
+	IniWrite, %catchColor%, Settings.ini, Common, CatchBarColor
+	CatchBarColorCfg := catchColor
+}
+IniRead, FishBarColorCfg, Settings.ini, Common, FishBarColor
+If (FishBarColorCfg = "ERROR") {
+	IniWrite, %fishColor%, Settings.ini, Common, FishBarColor
+	FishBarColorCfg := fishColor
+}
+IniRead, FishBarTolerance, Settings.ini, Common, FishBarTolerance
+If (FishBarTolerance = "ERROR") {
+	IniWrite, %fishTolerance%, Settings.ini, Common, FishBarTolerance
+	FishBarTolerance := fishTolerance
 }
 
 global RodControl := Control
@@ -152,8 +173,8 @@ $p::
 	global toolTipBarY := Floor(WindowHeight - (WindowHeight * (80 / 1080)))
 	global NavigationKey := NavigationKey
 	global offset := rodControl > 0.06 ? 0 : 30
-	global catchBarColor := (AlternateColors = "True" || AlternateColors = "true") ? "0xFFFFFF" : "0xf1f1f1"
-	global fishBarColor := (AlternateColors = "True" || AlternateColors = "true") ? "0x7d8aa6" : "0x434b5b"
+	global catchBarColor := (CatchBarColorCfg != "Auto") ? CatchBarColorCfg : ((AlternateColors = "True" || AlternateColors = "true") ? "0xFFFFFF" : "0xf1f1f1")
+	global fishBarColor := (FishBarColorCfg != "Auto") ? FishBarColorCfg : ((AlternateColors = "True" || AlternateColors = "true") ? "0x7d8aa6" : "0x434b5b")
 	tooltip, Made By Thansar25, %TooltipX%, %Tooltip1%, 1
 	tooltip, Screen: %WindowWidth% x %WindowHeight%, %TooltipX%, %Tooltip3%, 3
 	tooltip, Current Task: Waiting..., %TooltipX%, %Tooltip2%, 2
@@ -184,7 +205,7 @@ $p::
 		}
 		PixelSearch, Px, Py, fishBarLeftX, fishBarY, fishBarRightX, fishBarY, catchBarColor, 20, FastRGB
 		if (ErrorLevel = 0) {
-			PixelSearch, Px, Py, fishBarLeftX, fishBarYAlt, fishBarRightX, fishBarYAlt, fishBarColor, 5, FastRGB
+			PixelSearch, Px, Py, fishBarLeftX, fishBarYAlt, fishBarRightX, fishBarYAlt, fishBarColor, FishBarTolerance, FastRGB
 			If (ErrorLevel = 0) {
 				if(fishDebounce = 0) {
 					total := total + 1
@@ -195,7 +216,7 @@ $p::
 				MouseMove, WindowWidth * 0.5, WindowHeight * 0.5
 				Loop
 				{
-					PixelSearch, Px, Py, fishBarLeftX, fishBarYAlt, fishBarRightX, fishBarYAlt, fishBarColor, 5, FastRGB
+					PixelSearch, Px, Py, fishBarLeftX, fishBarYAlt, fishBarRightX, fishBarYAlt, fishBarColor, FishBarTolerance, FastRGB
 					if (ErrorLevel = 1) {
 						Reels()
 						tooltip
@@ -218,7 +239,7 @@ $p::
 								}
 							}
 							tooltip, Caught: %caught% / %total%, %TooltipX%, %Tooltip12%, 12
-							PixelSearch, CurrentTarget,, fishBarLeftX, fishBarYAlt, fishBarRightX, fishBarYAlt, fishBarColor, 5, FastRGB
+							PixelSearch, CurrentTarget,, fishBarLeftX, fishBarYAlt, fishBarRightX, fishBarYAlt, fishBarColor, FishBarTolerance, FastRGB
 							If (ErrorLevel = 1) {
 								Break
 							} else {
@@ -247,7 +268,7 @@ $p::
 											}
 										}
 										Tooltip, % "Fish at right for: " A_Index " ticks", WindowWidth / 2, ToolTipBarY + 25, 10
-										PixelSearch, CurrentTarget,, fishBarLeftX, fishBarYAlt, fishBarRightX, fishBarYAlt, fishBarColor, 5, FastRGB
+										PixelSearch, CurrentTarget,, fishBarLeftX, fishBarYAlt, fishBarRightX, fishBarYAlt, fishBarColor, FishBarTolerance, FastRGB
 										If (ErrorLevel = 0) {
 											tooltip, ., CurrentTarget, toolTipBarY - 3, 6
 											tooltip, >, fishBarRightX - (Control / 2) - (Control / 4), toolTipBarY, 8
@@ -266,7 +287,7 @@ $p::
 								} else {
 									PixelSearch, CurrentBarPosition,, fishBarLeftX, fishBarY, fishBarRightX, fishBarY, catchBarColor, 20,FastRGB
 									If (ErrorLevel = 0) {
-										PixelSearch, CurrentTarget,, fishBarLeftX, fishBarYAlt, fishBarRightX, fishBarYAlt, fishBarColor, 5, FastRGB
+										PixelSearch, CurrentTarget,, fishBarLeftX, fishBarYAlt, fishBarRightX, fishBarYAlt, fishBarColor, FishBarTolerance, FastRGB
 										CurrentBarPositionLeft := CurrentBarPosition
 										CurrentBarPositionRight := CurrentBarPosition + Control
 										CurrentBarPositionMiddle := CurrentBarPosition + (Control / 2)
@@ -338,7 +359,7 @@ $p::
 									} else {
 										PixelSearch, CurrentBarPosition,, fishBarLeftX, fishBarY, fishBarRightX, fishBarY, 0x808789, 10,FastRGB
 										If (ErrorLevel = 0) {
-											PixelSearch, CurrentTarget,, fishBarLeftX, fishBarYAlt, fishBarRightX, fishBarYAlt, fishBarColor, 5, FastRGB
+											PixelSearch, CurrentTarget,, fishBarLeftX, fishBarYAlt, fishBarRightX, fishBarYAlt, fishBarColor, FishBarTolerance, FastRGB
 											CurrentBarPositionLeft := CurrentBarPosition
 											CurrentBarPositionRight := CurrentBarPosition + Control
 											CurrentBarPositionMiddle := CurrentBarPosition + (Control / 2)
@@ -414,7 +435,7 @@ $p::
 								}
 							}
 						}
-						PixelSearch, CurrentTarget,, fishBarLeftX, fishBarYAlt, fishBarRightX, fishBarYAlt, fishBarColor, 5, FastRGB
+						PixelSearch, CurrentTarget,, fishBarLeftX, fishBarYAlt, fishBarRightX, fishBarYAlt, fishBarColor, FishBarTolerance, FastRGB
 						If (CurrentTarget > 408) {
 							AtRight := True
 							tooltip, ., CurrentTarget, toolTipBarY - 3, 6
@@ -429,7 +450,7 @@ $p::
 								if(ErrorLevel = 0) {
 									break
 								} else {
-									PixelSearch, CurrentTarget,, fishBarLeftX, fishBarYAlt, fishBarRightX, fishBarYAlt, fishBarColor, 5,FastRGB
+									PixelSearch, CurrentTarget,, fishBarLeftX, fishBarYAlt, fishBarRightX, fishBarYAlt, fishBarColor, FishBarTolerance,FastRGB
 									if(ErrorLevel = 1) {
 										break
 									} if(ErrorLevel = 0) {
@@ -442,7 +463,7 @@ $p::
 							Click, Up
 						}
 					} else {
-						PixelSearch, CurrentTarget,, fishBarLeftX, fishBarYAlt, fishBarRightX, fishBarYAlt, fishBarColor, 5, FastRGB
+						PixelSearch, CurrentTarget,, fishBarLeftX, fishBarYAlt, fishBarRightX, fishBarYAlt, fishBarColor, FishBarTolerance, FastRGB
 						If (ErrorLevel = 0) {
 							tooltip, ., CurrentTarget, toolTipBarY - 3, 6
 							If (CurrentTarget <= ((Control / 2) + fishBarLeftX + (Control / 4))) {
@@ -469,7 +490,7 @@ $p::
 										}
 									}
 									Tooltip, % "Fish at right for: " A_Index " ticks", WindowWidth / 2, ToolTipBarY + 25, 10
-									PixelSearch, CurrentTarget,, fishBarLeftX, fishBarYAlt, fishBarRightX, fishBarYAlt, fishBarColor, 5, FastRGB
+									PixelSearch, CurrentTarget,, fishBarLeftX, fishBarYAlt, fishBarRightX, fishBarYAlt, fishBarColor, FishBarTolerance, FastRGB
 									If (ErrorLevel = 0) {
 										tooltip, ., CurrentTarget, toolTipBarY - 3, 6
 										tooltip, >, fishBarRightX - (Control / 2) - (Control / 4), toolTipBarY, 8
@@ -493,7 +514,7 @@ $p::
 									Reels(clickHoldTime, True)
 								}
 							}
-							PixelSearch, CurrentTarget,, fishBarLeftX, fishBarYAlt, fishBarRightX, fishBarYAlt, fishBarColor, 5, FastRGB
+							PixelSearch, CurrentTarget,, fishBarLeftX, fishBarYAlt, fishBarRightX, fishBarYAlt, fishBarColor, FishBarTolerance, FastRGB
 							If (CurrentTarget > 408) {
 								AtRight := True
 								tooltip, ., CurrentTarget, toolTipBarY - 3, 6
