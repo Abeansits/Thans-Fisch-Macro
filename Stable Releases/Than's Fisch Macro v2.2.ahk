@@ -433,7 +433,7 @@ $p::
 									if(ErrorLevel = 1) {
 										break
 									} if(ErrorLevel = 0) {
-										if(Timer - A_TickCount > 2500) {
+										if(A_TickCount - Timer > 2500) {
 											break
 										}
 									}
