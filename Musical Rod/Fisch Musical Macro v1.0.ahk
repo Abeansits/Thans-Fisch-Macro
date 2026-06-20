@@ -16,6 +16,7 @@ HitBoxRadius := 12
 InactiveConfirm := 6
 ProbeIntervalMs := 25
 CaptureMode := "RGB"
+UseFastCapture := 1
 KeyD := "d"
 KeyF := "f"
 KeyJ := "j"
@@ -37,6 +38,24 @@ global downF := false
 global downJ := false
 global downK := false
 
+; ---- Fast screen-capture state (super-globals so all functions can see them) ----
+; One BitBlt of the lane strip per scan replaces ~9 slow per-pixel reads. Falls
+; back to per-pixel PixelGetColor if capture is unavailable or doesn't match.
+global useCapture := false
+global capInit := false
+global hScreenDC := 0
+global hMemDC := 0
+global hBmp := 0
+global hOldBmp := 0
+global pBits := 0
+global capW := 0
+global capHeight := 0
+global capStride := 0
+global capBaseX := 0
+global capBaseY := 0
+global capSrcX := 0
+global capSrcY := 0
+
 ; ===== Display-scale guard (must be 100%) =====
 if (A_ScreenDPI * 100 // 96 != 100) {
     Run, ms-settings:display
@@ -55,6 +74,7 @@ if !FileExist("Settings.ini") {
     IniWrite, %InactiveConfirm%, Settings.ini, Common, InactiveConfirm
     IniWrite, %ProbeIntervalMs%, Settings.ini, Common, ProbeIntervalMs
     IniWrite, %CaptureMode%, Settings.ini, Common, CaptureMode
+    IniWrite, %UseFastCapture%, Settings.ini, Common, UseFastCapture
     IniWrite, %KeyD%, Settings.ini, Common, KeyD
     IniWrite, %KeyF%, Settings.ini, Common, KeyF
     IniWrite, %KeyJ%, Settings.ini, Common, KeyJ
@@ -76,6 +96,7 @@ IniRead, HitBoxRadius, Settings.ini, Common, HitBoxRadius, %HitBoxRadius%
 IniRead, InactiveConfirm, Settings.ini, Common, InactiveConfirm, %InactiveConfirm%
 IniRead, ProbeIntervalMs, Settings.ini, Common, ProbeIntervalMs, %ProbeIntervalMs%
 IniRead, CaptureMode, Settings.ini, Common, CaptureMode, %CaptureMode%
+IniRead, UseFastCapture, Settings.ini, Common, UseFastCapture, %UseFastCapture%
 IniRead, KeyD, Settings.ini, Common, KeyD, %KeyD%
 IniRead, KeyF, Settings.ini, Common, KeyF, %KeyF%
 IniRead, KeyJ, Settings.ini, Common, KeyJ, %KeyJ%
@@ -124,6 +145,8 @@ return
 ComputeGeometry() {
     global
     client := WinGetClientPos(currentWindow)
+    clientX := client.X
+    clientY := client.Y
     WindowWidth := client.W
     WindowHeight := client.H
     laneX1 := Floor(WindowWidth * LaneDFrac)
@@ -140,6 +163,8 @@ ComputeGeometry() {
 }
 
 ; ===== Pixel brightness (max channel), capture-mode aware =====
+; Live per-pixel read via PixelGetColor (slow under DWM: ~ms each). Used by the
+; calibration overlay and as the fallback when fast capture is unavailable.
 PixelBright(x, y) {
     global CaptureMode
     PixelGetColor, c, x, y, %CaptureMode%
@@ -147,6 +172,85 @@ PixelBright(x, y) {
     G := (c >> 8) & 0xFF
     B := c & 0xFF
     return Max(R, G, B)
+}
+
+; ===== Fast strip capture (GDI BitBlt) =====
+; Grab the whole lane strip into memory ONCE per scan; then every lane/probe
+; pixel is a cheap in-memory NumGet instead of a slow PixelGetColor. Bounding
+; box covers x:[laneX1..laneX4], y:[probeY..scanY] (+margin), in screen coords.
+CaptureInit() {
+    global
+    margin := 6
+    capBaseX := laneX1 - margin
+    capBaseY := probeY - margin
+    capW := (laneX4 - laneX1) + 2 * margin + 1
+    capHeight := (scanY - probeY) + 2 * margin + 1
+    capStride := capW * 4
+    capSrcX := clientX + capBaseX
+    capSrcY := clientY + capBaseY
+    hOldBmp := 0, hBmp := 0, pBits := 0
+    hScreenDC := DllCall("GetDC", "Ptr", 0, "Ptr")
+    hMemDC := DllCall("CreateCompatibleDC", "Ptr", hScreenDC, "Ptr")
+    VarSetCapacity(bi, 40, 0)
+    NumPut(40, bi, 0, "UInt")            ; biSize
+    NumPut(capW, bi, 4, "Int")           ; biWidth
+    NumPut(-capHeight, bi, 8, "Int")     ; biHeight (negative = top-down rows)
+    NumPut(1, bi, 12, "UShort")          ; biPlanes
+    NumPut(32, bi, 14, "UShort")         ; biBitCount
+    NumPut(0, bi, 16, "UInt")            ; biCompression = BI_RGB
+    if (hScreenDC and hMemDC)
+        hBmp := DllCall("CreateDIBSection", "Ptr", hMemDC, "Ptr", &bi, "UInt", 0, "Ptr*", pBits, "Ptr", 0, "UInt", 0, "Ptr")
+    if (!hScreenDC or !hMemDC or !hBmp or !pBits) {
+        ; partial failure: free whatever we did acquire, then report failure
+        CaptureFree()
+        return false
+    }
+    hOldBmp := DllCall("SelectObject", "Ptr", hMemDC, "Ptr", hBmp, "Ptr")
+    capInit := true
+    return true
+}
+
+; BitBlt the strip from the screen into our memory bitmap. SRCCOPY = 0x00CC0020.
+; Returns the BitBlt result (nonzero = success) so callers can reject a bad frame.
+CaptureFrame() {
+    global hMemDC, capW, capHeight, hScreenDC, capSrcX, capSrcY
+    return DllCall("BitBlt", "Ptr", hMemDC, "Int", 0, "Int", 0, "Int", capW, "Int", capHeight, "Ptr", hScreenDC, "Int", capSrcX, "Int", capSrcY, "UInt", 0x00CC0020)
+}
+
+; Brightness (max channel) of a captured pixel at CLIENT coords (cx, cy).
+CapBright(cx, cy) {
+    global pBits, capStride, capBaseX, capBaseY
+    bx := cx - capBaseX
+    by := cy - capBaseY
+    c := NumGet(pBits + by * capStride + bx * 4, 0, "UInt")
+    R := (c >> 16) & 0xFF
+    G := (c >> 8) & 0xFF
+    B := c & 0xFF
+    return Max(R, G, B)
+}
+
+; Release all GDI handles (call on stop so we don't leak).
+CaptureFree() {
+    global
+    if (hMemDC and hOldBmp)
+        DllCall("SelectObject", "Ptr", hMemDC, "Ptr", hOldBmp)
+    if (hBmp)
+        DllCall("DeleteObject", "Ptr", hBmp)
+    if (hMemDC)
+        DllCall("DeleteDC", "Ptr", hMemDC)
+    if (hScreenDC)
+        DllCall("ReleaseDC", "Ptr", 0, "Ptr", hScreenDC)
+    hMemDC := 0, hBmp := 0, hScreenDC := 0, hOldBmp := 0, pBits := 0
+    capInit := false
+}
+
+; Unified read: from the last captured frame when fast capture is active,
+; else a live per-pixel read. Capturing callers must CaptureFrame() first.
+ReadBright(cx, cy) {
+    global useCapture
+    if (useCapture)
+        return CapBright(cx, cy)
+    return PixelBright(cx, cy)
 }
 
 ; ===== Lane brightness: max of a 3-point vertical cross (never one pixel) =====
@@ -160,17 +264,25 @@ LaneBright(cx, cy) {
 
 ; ===== Is the rhythm minigame on screen? =====
 ; All four ring-top probes bright AND the gap between lanes D and F dark.
+; RhythmActive() grabs a fresh frame (when capturing) then checks; use it from
+; cold paths. RhythmActiveCheck() reads the CURRENT frame without re-capturing;
+; use it in the hot loop right after the per-scan CaptureFrame().
 RhythmActive() {
+    if (useCapture)
+        CaptureFrame()
+    return RhythmActiveCheck()
+}
+RhythmActiveCheck() {
     global laneX1, laneX2, laneX3, laneX4, probeY, ringY, gapX, BrightnessThreshold
-    if (PixelBright(laneX1, probeY) < BrightnessThreshold)
+    if (ReadBright(laneX1, probeY) < BrightnessThreshold)
         return false
-    if (PixelBright(laneX2, probeY) < BrightnessThreshold)
+    if (ReadBright(laneX2, probeY) < BrightnessThreshold)
         return false
-    if (PixelBright(laneX3, probeY) < BrightnessThreshold)
+    if (ReadBright(laneX3, probeY) < BrightnessThreshold)
         return false
-    if (PixelBright(laneX4, probeY) < BrightnessThreshold)
+    if (ReadBright(laneX4, probeY) < BrightnessThreshold)
         return false
-    if (PixelBright(gapX, ringY) > BrightnessThreshold)
+    if (ReadBright(gapX, ringY) > BrightnessThreshold)
         return false
     return true
 }
@@ -262,8 +374,9 @@ DoCast() {
 }
 
 ShowHud(status) {
-    global centerX, probeY, hits, caught, scanRate
-    ToolTip, % "Musical Macro | " status " | hits:" hits " caught:" caught " | scan:" scanRate "/s  (O reload, M exit)", centerX - 200, probeY - 70, 1
+    global centerX, probeY, hits, caught, scanRate, useCapture
+    mode := useCapture ? "fast" : "compat"
+    ToolTip, % "Musical Macro | " status " | hits:" hits " caught:" caught " | scan:" scanRate "/s (" mode ")  (O reload, M exit)", centerX - 220, probeY - 70, 1
 }
 
 ; Full AFK loop. Safety rules (see plan Global Constraints):
@@ -288,6 +401,28 @@ RunAuto() {
     global KeyD, KeyF, KeyJ, KeyK
     global downD, downF, downJ, downK
     global CastHoldMs, PostCatchWaitMs, RhythmAppearTimeoutMs
+    global UseFastCapture, probeY
+    ; --- set up fast strip capture, with a self-test + automatic fallback ---
+    useCapture := false
+    if (UseFastCapture = 1 or UseFastCapture = "1") {
+        if (CaptureInit()) {
+            ; Only trust capture if BitBlt succeeds AND it reproduces the live
+            ; PixelGetColor values at two static ring-top points. If a display
+            ; mode captures black, the values won't match and we fall back to
+            ; per-pixel reads (worst case = today's behavior, never a broken
+            ; black detector).
+            if (CaptureFrame()) {
+                d1 := Abs(CapBright(laneX1, probeY) - PixelBright(laneX1, probeY))
+                d2 := Abs(CapBright(laneX4, probeY) - PixelBright(laneX4, probeY))
+                if (d1 <= 30 and d2 <= 30)
+                    useCapture := true
+                else
+                    CaptureFree()
+            } else {
+                CaptureFree()
+            }
+        }
+    }
     armedD := false, armedF := false, armedJ := false, armedK := false
     inSong := false
     inactiveCount := 0
@@ -341,11 +476,13 @@ RunAuto() {
                 }
             }
         } else {
-            ; ---- IN SONG: fast path. One read per lane (catch-critical). ----
-            bD := PixelBright(laneX1, scanY)
-            bF := PixelBright(laneX2, scanY)
-            bJ := PixelBright(laneX3, scanY)
-            bK := PixelBright(laneX4, scanY)
+            ; ---- IN SONG: fast path. One strip capture, then 4 cheap reads. ----
+            if (useCapture)
+                CaptureFrame()
+            bD := ReadBright(laneX1, scanY)
+            bF := ReadBright(laneX2, scanY)
+            bJ := ReadBright(laneX3, scanY)
+            bK := ReadBright(laneX4, scanY)
             if (bD > BrightnessThreshold) {
                 if (armedD and !downD) {
                     Send, % "{" KeyD " down}"
@@ -407,7 +544,7 @@ RunAuto() {
             ; per-iteration lane reads, so it barely affects the catch rate.
             if (A_TickCount - lastProbe >= ProbeIntervalMs) {
                 lastProbe := A_TickCount
-                if (RhythmActive())
+                if (RhythmActiveCheck())   ; reuse the frame already captured this scan
                     inactiveCount := 0
                 else
                     inactiveCount += 1
@@ -435,4 +572,5 @@ RunAuto() {
         }
     }
     ReleaseAllKeys()
+    CaptureFree()
 }

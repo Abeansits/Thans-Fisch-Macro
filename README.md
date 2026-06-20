@@ -96,16 +96,22 @@ Key settings (Settings.ini):
   the scan rate (see below) - only use it if RGB/Alt RGB can't see the notes.
 - InactiveConfirm - how many consecutive "minigame gone" probes end the song
   (default 6). Raise it if a song ends early or a catch is miscounted.
-- ProbeIntervalMs - how often (ms) the "is the song over?" check runs while all
-  lanes are dark (default 25). It never runs while notes are on screen, so it
-  doesn't slow note-catching; leave it unless song-end detection feels laggy.
+- ProbeIntervalMs - how often (ms) the "is the song over?" check runs (default
+  25). Cheap; leave it unless song-end detection feels laggy.
+- UseFastCapture - 1 (default) grabs the whole lane strip in ONE screen capture
+  per scan instead of reading each pixel separately, which is far faster on
+  machines where per-pixel reads are slow. On start it self-tests against a
+  normal read and automatically falls back if the capture doesn't match (so it
+  can never make things worse). Set to 0 to force the old per-pixel method.
 
 Speed (if it can't keep up when notes rush at the end): the HUD shows a live
-"scan:N/s" counter = how many times per second the macro samples the lanes.
-Higher is better; you want this comfortably into the hundreds. If it's low
-(tens), the screen reads are the bottleneck - the usual cause is CaptureMode set
-to "Slow RGB". Try "Alt RGB" or "RGB" (re-calibrate to confirm the notes are
-still seen). The detector reads one pixel per lane per scan for maximum speed.
+"scan:N/s" counter (and "(fast)" or "(compat)" = whether fast capture is
+active). scan/s is how many times per second the macro samples the lanes -
+higher is better; you want it comfortably into the hundreds. If it's stuck in
+the tens, screen reads are the bottleneck. With UseFastCapture=1 it should read
+"(fast)" and be fast; if it says "(compat)", fast capture failed its self-test
+(unusual display mode) and you may need borderless/windowed fullscreen. Also
+make sure CaptureMode isn't "Slow RGB" (that mode is slow even with capture).
 - CastHoldMs / PostCatchWaitMs / RhythmAppearTimeoutMs - cast charge time, pause
   after a catch, and how long to wait for a bite before re-casting.
 - Geometry section - lane fractions / ring position; only change for non-16:9
