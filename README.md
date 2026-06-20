@@ -92,9 +92,20 @@ Key settings (Settings.ini):
   110; empty ring ~30, note ~250).
 - CaptureMode - how the screen is read (default RGB). If calibration shows the
   lanes stuck near 0 while the game is visible, set this to "Alt RGB" or
-  "Slow RGB" and press O.
-- InactiveConfirm - how many consecutive "minigame gone" reads end the song
+  "Slow RGB" and press O. NOTE: "Slow RGB" is much slower per read and lowers
+  the scan rate (see below) - only use it if RGB/Alt RGB can't see the notes.
+- InactiveConfirm - how many consecutive "minigame gone" probes end the song
   (default 6). Raise it if a song ends early or a catch is miscounted.
+- ProbeIntervalMs - how often (ms) the "is the song over?" check runs while all
+  lanes are dark (default 25). It never runs while notes are on screen, so it
+  doesn't slow note-catching; leave it unless song-end detection feels laggy.
+
+Speed (if it can't keep up when notes rush at the end): the HUD shows a live
+"scan:N/s" counter = how many times per second the macro samples the lanes.
+Higher is better; you want this comfortably into the hundreds. If it's low
+(tens), the screen reads are the bottleneck - the usual cause is CaptureMode set
+to "Slow RGB". Try "Alt RGB" or "RGB" (re-calibrate to confirm the notes are
+still seen). The detector reads one pixel per lane per scan for maximum speed.
 - CastHoldMs / PostCatchWaitMs / RhythmAppearTimeoutMs - cast charge time, pause
   after a catch, and how long to wait for a bite before re-casting.
 - Geometry section - lane fractions / ring position; only change for non-16:9

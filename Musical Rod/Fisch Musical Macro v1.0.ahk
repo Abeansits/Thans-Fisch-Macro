@@ -14,6 +14,7 @@ BrightnessThreshold := 110
 HitOffsetPixels := 15
 HitBoxRadius := 12
 InactiveConfirm := 6
+ProbeIntervalMs := 25
 CaptureMode := "RGB"
 KeyD := "d"
 KeyF := "f"
@@ -30,6 +31,7 @@ RadiusFracY := 0.0486
 global running := false
 global hits := 0
 global caught := 0
+global scanRate := 0
 global downD := false
 global downF := false
 global downJ := false
@@ -51,6 +53,7 @@ if !FileExist("Settings.ini") {
     IniWrite, %HitOffsetPixels%, Settings.ini, Common, HitOffsetPixels
     IniWrite, %HitBoxRadius%, Settings.ini, Common, HitBoxRadius
     IniWrite, %InactiveConfirm%, Settings.ini, Common, InactiveConfirm
+    IniWrite, %ProbeIntervalMs%, Settings.ini, Common, ProbeIntervalMs
     IniWrite, %CaptureMode%, Settings.ini, Common, CaptureMode
     IniWrite, %KeyD%, Settings.ini, Common, KeyD
     IniWrite, %KeyF%, Settings.ini, Common, KeyF
@@ -71,6 +74,7 @@ IniRead, BrightnessThreshold, Settings.ini, Common, BrightnessThreshold, %Bright
 IniRead, HitOffsetPixels, Settings.ini, Common, HitOffsetPixels, %HitOffsetPixels%
 IniRead, HitBoxRadius, Settings.ini, Common, HitBoxRadius, %HitBoxRadius%
 IniRead, InactiveConfirm, Settings.ini, Common, InactiveConfirm, %InactiveConfirm%
+IniRead, ProbeIntervalMs, Settings.ini, Common, ProbeIntervalMs, %ProbeIntervalMs%
 IniRead, CaptureMode, Settings.ini, Common, CaptureMode, %CaptureMode%
 IniRead, KeyD, Settings.ini, Common, KeyD, %KeyD%
 IniRead, KeyF, Settings.ini, Common, KeyF, %KeyF%
@@ -258,48 +262,91 @@ DoCast() {
 }
 
 ShowHud(status) {
-    global centerX, probeY, hits, caught
-    ToolTip, % "Musical Macro | " status " | hits:" hits " caught:" caught "  (O reload, M exit)", centerX - 170, probeY - 70, 1
+    global centerX, probeY, hits, caught, scanRate
+    ToolTip, % "Musical Macro | " status " | hits:" hits " caught:" caught " | scan:" scanRate "/s  (O reload, M exit)", centerX - 200, probeY - 70, 1
 }
 
 ; Full AFK loop. Safety rules (see plan Global Constraints):
 ;  - focus guard: never press unless Roblox is foreground
 ;  - arm-from-dark: a lane fires only after it has been seen dark this song
-;  - edge down/up, zero sleep in the hot loop; Sleep,-1 only pumps messages so
-;    O/M stay responsive without slowing the scan
-;  - InactiveConfirm consecutive inactive reads required before "song over"
+;  - edge down/up, no real sleep in the hot loop; Sleep,-1 only pumps messages
+;    so O/M stay responsive without slowing the scan
+;  - PERFORMANCE: while playing we read ONLY the 4 lane scan points (1 px each)
+;    per iteration. The expensive 5-read RhythmActive() probe (which decides
+;    "song over") runs on a time throttle (ProbeIntervalMs, ~40x/sec) instead
+;    of every iteration, so it barely competes with catching fast notes. A
+;    typical rushing-notes iteration is 4 reads, vs 17 before.
+;  - InactiveConfirm consecutive failed ring-presence probes end the song. The
+;    target rings persist through in-song note gaps, so a gap still reads
+;    RhythmActive()=true; only the rings vanishing (minigame closed) ends it.
+;    Probing on a timer (not gated on "all lanes dark") keeps song-end working
+;    when the scene behind the translucent panels is bright.
 RunAuto() {
-    global running, hits, caught
+    global running, hits, caught, scanRate
     global laneX1, laneX2, laneX3, laneX4, scanY
-    global BrightnessThreshold, InactiveConfirm
+    global BrightnessThreshold, InactiveConfirm, ProbeIntervalMs
     global KeyD, KeyF, KeyJ, KeyK
     global downD, downF, downJ, downK
     global CastHoldMs, PostCatchWaitMs, RhythmAppearTimeoutMs
     armedD := false, armedF := false, armedJ := false, armedK := false
-    prevActive := false
+    inSong := false
     inactiveCount := 0
+    lastProbe := 0
     hudTimer := A_TickCount
+    rateTimer := A_TickCount
+    loopCount := 0
     Loop {
         if (!running)
             break
+        loopCount += 1
         ; --- focus guard: never type into another app ---
         if (!WinActive("ahk_exe RobloxPlayerBeta.exe")) {
             ReleaseAllKeys()
             armedD := false, armedF := false, armedJ := false, armedK := false
+            inSong := false
+            inactiveCount := 0
             ShowHud("Paused - Roblox not focused")
-            Sleep, 250
+            Sleep, 100
             continue
         }
-        if (RhythmActive()) {
-            inactiveCount := 0
-            if (!prevActive) {
-                ; song just started: require a dark baseline before pressing
+        if (!inSong) {
+            ; Not catching notes: enter a song if one is already up, else cast.
+            ; Re-cast happens naturally — a timed-out wait falls through and the
+            ; next outer iteration re-enters here. None of this is time-critical.
+            if (RhythmActive()) {
+                inSong := true
+                inactiveCount := 0
                 armedD := false, armedF := false, armedJ := false, armedK := false
-                prevActive := true
                 ShowHud("Playing")
+            } else {
+                ShowHud("Casting")
+                DoCast()
+                ShowHud("Waiting for bite")
+                waitStart := A_TickCount
+                Loop {
+                    if (!running)
+                        break
+                    if (!WinActive("ahk_exe RobloxPlayerBeta.exe"))
+                        break
+                    if (RhythmActive()) {
+                        inSong := true
+                        inactiveCount := 0
+                        armedD := false, armedF := false, armedJ := false, armedK := false
+                        ShowHud("Playing")
+                        break
+                    }
+                    if (A_TickCount - waitStart > RhythmAppearTimeoutMs)
+                        break
+                    Sleep, 50
+                }
             }
-            ; ---- HOT SCAN LOOP: no real sleep, edge down/up per lane ----
-            if (LaneBright(laneX1, scanY) > BrightnessThreshold) {
+        } else {
+            ; ---- IN SONG: fast path. One read per lane (catch-critical). ----
+            bD := PixelBright(laneX1, scanY)
+            bF := PixelBright(laneX2, scanY)
+            bJ := PixelBright(laneX3, scanY)
+            bK := PixelBright(laneX4, scanY)
+            if (bD > BrightnessThreshold) {
                 if (armedD and !downD) {
                     Send, % "{" KeyD " down}"
                     downD := true
@@ -312,7 +359,7 @@ RunAuto() {
                     downD := false
                 }
             }
-            if (LaneBright(laneX2, scanY) > BrightnessThreshold) {
+            if (bF > BrightnessThreshold) {
                 if (armedF and !downF) {
                     Send, % "{" KeyF " down}"
                     downF := true
@@ -325,7 +372,7 @@ RunAuto() {
                     downF := false
                 }
             }
-            if (LaneBright(laneX3, scanY) > BrightnessThreshold) {
+            if (bJ > BrightnessThreshold) {
                 if (armedJ and !downJ) {
                     Send, % "{" KeyJ " down}"
                     downJ := true
@@ -338,7 +385,7 @@ RunAuto() {
                     downJ := false
                 }
             }
-            if (LaneBright(laneX4, scanY) > BrightnessThreshold) {
+            if (bK > BrightnessThreshold) {
                 if (armedK and !downK) {
                     Send, % "{" KeyK " down}"
                     downK := true
@@ -351,38 +398,39 @@ RunAuto() {
                     downK := false
                 }
             }
-            Sleep, -1   ; pump messages (keeps O/M responsive); no real delay
-        } else {
-            inactiveCount += 1
-            if (inactiveCount >= InactiveConfirm) {
-                ReleaseAllKeys()
-                armedD := false, armedF := false, armedJ := false, armedK := false
-                if (prevActive) {
+            ; Song-end check: probe ring presence on a time throttle (~40x/sec),
+            ; regardless of lane brightness, so it also works when the scene
+            ; behind the translucent panels is bright (where lanes never read
+            ; fully "dark"). Rings persist through note gaps; only the minigame
+            ; closing makes RhythmActive() false. InactiveConfirm consecutive
+            ; failures end the song. The probe runs far less often than the
+            ; per-iteration lane reads, so it barely affects the catch rate.
+            if (A_TickCount - lastProbe >= ProbeIntervalMs) {
+                lastProbe := A_TickCount
+                if (RhythmActive())
+                    inactiveCount := 0
+                else
+                    inactiveCount += 1
+                if (inactiveCount >= InactiveConfirm) {
+                    ReleaseAllKeys()
+                    armedD := false, armedF := false, armedJ := false, armedK := false
                     caught += 1
-                    prevActive := false
+                    inSong := false
+                    inactiveCount := 0
                     ShowHud("Caught")
                     Sleep, %PostCatchWaitMs%
                 }
-                ShowHud("Casting")
-                DoCast()
-                ShowHud("Waiting for bite")
-                waitStart := A_TickCount
-                Loop {
-                    if (!running)
-                        break
-                    if (WinActive("ahk_exe RobloxPlayerBeta.exe") and RhythmActive())
-                        break
-                    if (A_TickCount - waitStart > RhythmAppearTimeoutMs)
-                        break
-                    Sleep, 50
-                }
-                inactiveCount := 0
-            } else {
-                Sleep, -1
             }
+            Sleep, -1   ; pump messages (keeps O/M responsive); no real delay
+        }
+        ; scan-rate measurement (loops/sec) surfaced in the HUD
+        if (A_TickCount - rateTimer >= 1000) {
+            scanRate := loopCount
+            loopCount := 0
+            rateTimer := A_TickCount
         }
         if (A_TickCount - hudTimer > 300) {
-            ShowHud(prevActive ? "Playing" : "Idle")
+            ShowHud(inSong ? "Playing" : "Idle")
             hudTimer := A_TickCount
         }
     }
