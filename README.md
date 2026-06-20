@@ -58,3 +58,49 @@ hover the fish marker on the reel bar and read the hex color shown. Put that val
 press O to reload, then P to run.
 
 [Virustotal scan of the .ahk program](https://www.virustotal.com/gui/file/c041cb7ad42291cd0d8082690c206fe3486f5b7854edecfd8ac8f39016d17fde?nocache=1)
+
+====================================================
+
+MUSICAL ROD MACRO (rhythm minigame):
+
+For rods whose catch minigame is the 4-lane D/F/J/K rhythm game, use
+"Musical Rod/Fisch Musical Macro v1.0.ahk". It runs a full AFK loop:
+cast -> wait for the bite -> hit the notes -> re-cast.
+
+It only presses keys while Roblox is the focused window, so it will not type
+into other apps if you alt-tab away (it pauses and resumes on refocus).
+
+Setup:
+1. Install AutoHotkey v1.1. Put the .ahk in its own folder and run it
+   (creates Settings.ini). Run Roblox in BORDERLESS fullscreen at a 16:9
+   resolution, Windows Display Scale 100%. (Exclusive fullscreen can make the
+   screen-reader return black; if so see CaptureMode below.)
+2. First, calibrate: set TestMode=1 in Settings.ini, press O to reload, open
+   the minigame and press P. A diagnostic overlay shows, per lane, the live and
+   min/max brightness, plus focus/active state and a flicker counter. No keys
+   are pressed in this mode. You want each lane low (~20-40) when empty and high
+   (~240+) when a note crosses the ring, and flicker staying near 0. Tune
+   BrightnessThreshold to sit between empty-max and note-min, then press O.
+3. Run: set TestMode=0, press O, equip the rod, press P. P = start,
+   O = reload settings, M = exit.
+
+Key settings (Settings.ini):
+- HitOffsetPixels - scan point offset below ring center. Lower it (toward 0 or
+  negative) to fire earlier on the very fast end-game notes; raise it to fire
+  later. Tune this first.
+- BrightnessThreshold - dark/bright cutoff for "a note is on the ring" (default
+  110; empty ring ~30, note ~250).
+- CaptureMode - how the screen is read (default RGB). If calibration shows the
+  lanes stuck near 0 while the game is visible, set this to "Alt RGB" or
+  "Slow RGB" and press O.
+- InactiveConfirm - how many consecutive "minigame gone" reads end the song
+  (default 6). Raise it if a song ends early or a catch is miscounted.
+- CastHoldMs / PostCatchWaitMs / RhythmAppearTimeoutMs - cast charge time, pause
+  after a catch, and how long to wait for a bite before re-casting.
+- Geometry section - lane fractions / ring position; only change for non-16:9
+  layouts. Regenerate with tools/analyze_rhythm.py from a screenshot.
+
+Dev note (Mac): tools/analyze_rhythm.py validates lane geometry and note
+detection against screenshots without the game, and prints the Settings values
+above. Run: python3 -m venv .venv && .venv/bin/pip install -r tools/requirements.txt
+then .venv/bin/python tools/analyze_rhythm.py your_shot.png --out /tmp
