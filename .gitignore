@@ -1,0 +1,5 @@
+.venv/
+__pycache__/
+tools/overlay_*.png
+Stable Releases/Settings.ini
+Musical Rod/Settings.ini
