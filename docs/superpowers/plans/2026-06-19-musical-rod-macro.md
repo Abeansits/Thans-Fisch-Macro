@@ -20,6 +20,19 @@
 - Commits use the repo author's email: `git config user.email sebastian.nystorm@spotter.la` (set once in Task 1).
 - **Platform note for Phase 2:** AutoHotkey cannot run on the macOS dev machine, so AHK tasks cannot be unit-tested locally. Their correctness rests on (a) the constants/geometry already validated by the Phase 1 Python tool and (b) a built-in **TestMode** calibration overlay the user runs on Windows (draws scan boxes + live brightness, presses nothing). Each AHK task's verification is a concrete manual procedure on Windows, by design — not an omission.
 
+### Safety/robustness hardening (from Codex review — applies to all AHK tasks)
+
+These are mandatory in the macro; they are why the auto-player is safe to leave running:
+
+1. **No re-entry:** `#MaxThreadsPerHotkey 1` and a global `running` flag; `$p::` returns immediately if already running.
+2. **Focus guard:** every main-loop iteration checks `WinActive("ahk_exe RobloxPlayerBeta.exe")`. If Roblox is not the foreground window, release all keys, show a paused HUD, and press nothing — never type D/F/J/K into another app.
+3. **Arm-from-dark:** at song start every lane's `armed` flag is `false`; a lane only becomes armed after it has been observed **dark** at least once. A lane that never reads dark (bad threshold/geometry, or stuck bright) is never pressed — it self-disables. This is how "do nothing when unsure" is actually enforced.
+4. **Edge down/up, zero sleep:** press `{key down}` on the dark→bright rising edge and `{key up}` on the bright→dark falling edge. No `Sleep` in the hot loop (natural hold = the note's dwell time); independent per lane, so chords work with no skew. `SetKeyDelay, -1, -1`.
+5. **Multi-point sampling:** lane brightness is the **max of a 3-point vertical cross** (center, center±`HitBoxRadius`), never a single pixel.
+6. **Active-state hysteresis:** the song is only declared over after `InactiveConfirm` (default 6) consecutive `RhythmActive()=false` reads; a single transient flash/miss cannot end the song, miscount a catch, or trigger a mid-song re-cast.
+7. **Configurable capture mode:** `PixelGetColor` uses a `CaptureMode` setting (default `RGB`; fallbacks `Alt RGB` / `Slow RGB`) because some fullscreen/D3D modes return black under the default. README recommends borderless-fullscreen.
+8. **Clean key release:** `ReleaseAllKeys()` runs on focus loss, song end, `O` (reload), and `M` (exit) so no key is ever left stuck down. No bare `global` in `RunAuto()` — declare only the specific globals used.
+
 ---
 
 ## Phase 1 — Mac-side validation tool (Python, TDD)
@@ -552,13 +565,16 @@ git commit -m "Add overlay rendering and CLI to rhythm-analysis tool"
 
 > Reminder (see Global Constraints): these tasks cannot run on macOS. Verify by reading the code against this plan, then by the stated Windows procedure. The geometry/threshold constants are already validated by Phase 1.
 
-### Task 6: Scaffolding, settings, geometry, and TestMode calibration
+### Task 6: Scaffolding, settings, geometry, and TestMode diagnostic
 
 **Files:**
 - Create: `Musical Rod/Fisch Musical Macro v1.0.ahk`
 
 **Interfaces:**
-- Produces (globals/functions later tasks rely on): `GetRobloxHWND()`, `WinGetClientPos(hwnd)`, `ComputeGeometry()` (sets globals `WindowWidth/Height`, `laneX1..4`, `ringY`, `radius`, `scanY`, `probeY`, `centerX`, `centerY`, `gapX`), `PixelBright(x,y)`, `RhythmActive()`, `RunCalibration()`. Settings globals: `CastHoldMs`, `PostCatchWaitMs`, `RhythmAppearTimeoutMs`, `BrightnessThreshold`, `HitOffsetPixels`, `HitBoxRadius`, `KeyHoldMs`, `KeyD/F/J/K`, `TestMode`, `LaneDFrac/FFrac/JFrac/KFrac`, `RingFracY`, `RadiusFracY`.
+- Produces (relied on by Task 7): directives (`#MaxThreadsPerHotkey 1`, `SetBatchLines -1`, `SetKeyDelay -1,-1`); globals `running`, `hits`, `caught`, `downD/F/J/K`; functions `GetRobloxHWND()`, `WinGetClientPos(hwnd)`, `ComputeGeometry()` (sets `WindowWidth/Height`, `laneX1..4`, `ringY`, `radius`, `scanY`, `probeY`, `centerX`, `centerY`, `gapX`), `PixelBright(x,y)`, `LaneBright(cx,cy)`, `RhythmActive()`, `ReleaseAllKeys()`, `RunCalibration()`. Settings globals: `CastHoldMs`, `PostCatchWaitMs`, `RhythmAppearTimeoutMs`, `BrightnessThreshold`, `HitOffsetPixels`, `HitBoxRadius`, `InactiveConfirm`, `CaptureMode`, `KeyD/F/J/K`, `TestMode`, `LaneDFrac/FFrac/JFrac/KFrac`, `RingFracY`, `RadiusFracY`.
+
+This task implements all eight hardening rules from the Global Constraints
+"Safety/robustness hardening" block except the auto-play loop itself (Task 7).
 
 - [ ] **Step 1: Write the full scaffolding file**
 
@@ -566,6 +582,9 @@ Create `Musical Rod/Fisch Musical Macro v1.0.ahk`:
 
 ```ahk
 #SingleInstance, force
+#MaxThreadsPerHotkey 1
+SetBatchLines, -1
+SetKeyDelay, -1, -1
 CoordMode, Pixel, Client
 CoordMode, Mouse, Client
 CoordMode, ToolTip, Client
@@ -577,7 +596,8 @@ RhythmAppearTimeoutMs := 12000
 BrightnessThreshold := 110
 HitOffsetPixels := 15
 HitBoxRadius := 12
-KeyHoldMs := 15
+InactiveConfirm := 6
+CaptureMode := "RGB"
 KeyD := "d"
 KeyF := "f"
 KeyJ := "j"
@@ -589,6 +609,14 @@ LaneJFrac := 0.5492
 LaneKFrac := 0.6480
 RingFracY := 0.7653
 RadiusFracY := 0.0486
+
+global running := false
+global hits := 0
+global caught := 0
+global downD := false
+global downF := false
+global downJ := false
+global downK := false
 
 ; ===== Display-scale guard (must be 100%) =====
 if (A_ScreenDPI * 100 // 96 != 100) {
@@ -605,7 +633,8 @@ if !FileExist("Settings.ini") {
     IniWrite, %BrightnessThreshold%, Settings.ini, Common, BrightnessThreshold
     IniWrite, %HitOffsetPixels%, Settings.ini, Common, HitOffsetPixels
     IniWrite, %HitBoxRadius%, Settings.ini, Common, HitBoxRadius
-    IniWrite, %KeyHoldMs%, Settings.ini, Common, KeyHoldMs
+    IniWrite, %InactiveConfirm%, Settings.ini, Common, InactiveConfirm
+    IniWrite, %CaptureMode%, Settings.ini, Common, CaptureMode
     IniWrite, %KeyD%, Settings.ini, Common, KeyD
     IniWrite, %KeyF%, Settings.ini, Common, KeyF
     IniWrite, %KeyJ%, Settings.ini, Common, KeyJ
@@ -624,7 +653,8 @@ IniRead, RhythmAppearTimeoutMs, Settings.ini, Common, RhythmAppearTimeoutMs, %Rh
 IniRead, BrightnessThreshold, Settings.ini, Common, BrightnessThreshold, %BrightnessThreshold%
 IniRead, HitOffsetPixels, Settings.ini, Common, HitOffsetPixels, %HitOffsetPixels%
 IniRead, HitBoxRadius, Settings.ini, Common, HitBoxRadius, %HitBoxRadius%
-IniRead, KeyHoldMs, Settings.ini, Common, KeyHoldMs, %KeyHoldMs%
+IniRead, InactiveConfirm, Settings.ini, Common, InactiveConfirm, %InactiveConfirm%
+IniRead, CaptureMode, Settings.ini, Common, CaptureMode, %CaptureMode%
 IniRead, KeyD, Settings.ini, Common, KeyD, %KeyD%
 IniRead, KeyF, Settings.ini, Common, KeyF, %KeyF%
 IniRead, KeyJ, Settings.ini, Common, KeyJ, %KeyJ%
@@ -637,13 +667,22 @@ IniRead, LaneKFrac, Settings.ini, Geometry, LaneKFrac, %LaneKFrac%
 IniRead, RingFracY, Settings.ini, Geometry, RingFracY, %RingFracY%
 IniRead, RadiusFracY, Settings.ini, Geometry, RadiusFracY, %RadiusFracY%
 
-global hits := 0
-global caught := 0
-
 ; ===== Hotkeys =====
-$o::Reload
-$m::ExitApp
+$o::
+    running := false
+    ReleaseAllKeys()
+    Reload
+return
+
+$m::
+    running := false
+    ReleaseAllKeys()
+    ExitApp
+return
+
 $p::
+    if (running)
+        return
     currentWindow := GetRobloxHWND()
     if (!currentWindow) {
         MsgBox, Roblox needs to be open first.
@@ -652,13 +691,15 @@ $p::
     WinActivate, ahk_exe RobloxPlayerBeta.exe
     Sleep, 250
     ComputeGeometry()
+    running := true
     if (TestMode = 1 or TestMode = "1")
         RunCalibration()
     else
         RunAuto()
+    running := false
 return
 
-; ===== Geometry =====
+; ===== Geometry (all coords floored to ints) =====
 ComputeGeometry() {
     global
     client := WinGetClientPos(currentWindow)
@@ -677,17 +718,27 @@ ComputeGeometry() {
     gapX := Floor((laneX1 + laneX2) / 2)
 }
 
-; ===== Pixel brightness (max channel) =====
+; ===== Pixel brightness (max channel), capture-mode aware =====
 PixelBright(x, y) {
-    PixelGetColor, c, x, y, RGB
+    global CaptureMode
+    PixelGetColor, c, x, y, %CaptureMode%
     R := (c >> 16) & 0xFF
     G := (c >> 8) & 0xFF
     B := c & 0xFF
     return Max(R, G, B)
 }
 
+; ===== Lane brightness: max of a 3-point vertical cross (never one pixel) =====
+LaneBright(cx, cy) {
+    global HitBoxRadius
+    b := PixelBright(cx, cy)
+    b := Max(b, PixelBright(cx, cy - HitBoxRadius))
+    b := Max(b, PixelBright(cx, cy + HitBoxRadius))
+    return b
+}
+
 ; ===== Is the rhythm minigame on screen? =====
-; All four ring-top probes bright AND the gap between two lanes dark.
+; All four ring-top probes bright AND the gap between lanes D and F dark.
 RhythmActive() {
     global laneX1, laneX2, laneX3, laneX4, probeY, ringY, gapX, BrightnessThreshold
     if (PixelBright(laneX1, probeY) < BrightnessThreshold)
@@ -703,20 +754,63 @@ RhythmActive() {
     return true
 }
 
-; ===== Calibration overlay: presses NOTHING; shows what the macro sees =====
+; ===== Release any keys we are holding (safety) =====
+ReleaseAllKeys() {
+    global downD, downF, downJ, downK, KeyD, KeyF, KeyJ, KeyK
+    if (downD) {
+        Send, % "{" KeyD " up}"
+        downD := false
+    }
+    if (downF) {
+        Send, % "{" KeyF " up}"
+        downF := false
+    }
+    if (downJ) {
+        Send, % "{" KeyJ " up}"
+        downJ := false
+    }
+    if (downK) {
+        Send, % "{" KeyK " up}"
+        downK := false
+    }
+}
+
+; ===== Calibration / diagnostic overlay: presses NOTHING =====
+; Shows live + min/max brightness per lane, focus state, and how many times
+; RhythmActive() flipped (flicker) so thresholds/capture mode can be tuned.
 RunCalibration() {
     global
+    minD := 999, minF := 999, minJ := 999, minK := 999
+    maxD := 0, maxF := 0, maxJ := 0, maxK := 0
+    flicker := 0
+    prevActive := RhythmActive()
     Loop {
+        if (!running)
+            break
+        focused := WinActive("ahk_exe RobloxPlayerBeta.exe") ? 1 : 0
         active := RhythmActive()
-        b1 := PixelBright(laneX1, scanY)
-        b2 := PixelBright(laneX2, scanY)
-        b3 := PixelBright(laneX3, scanY)
-        b4 := PixelBright(laneX4, scanY)
-        ToolTip, % "CALIBRATION (no keys). RhythmActive: " active "  thr:" BrightnessThreshold, centerX - 150, probeY - 60, 1
-        ToolTip, % "D " b1 " " (b1 > BrightnessThreshold ? "<HIT>" : "-"), laneX1 - 30, scanY, 2
-        ToolTip, % "F " b2 " " (b2 > BrightnessThreshold ? "<HIT>" : "-"), laneX2 - 30, scanY, 3
-        ToolTip, % "J " b3 " " (b3 > BrightnessThreshold ? "<HIT>" : "-"), laneX3 - 30, scanY, 4
-        ToolTip, % "K " b4 " " (b4 > BrightnessThreshold ? "<HIT>" : "-"), laneX4 - 30, scanY, 5
+        if (active != prevActive)
+            flicker += 1
+        prevActive := active
+        b1 := LaneBright(laneX1, scanY)
+        b2 := LaneBright(laneX2, scanY)
+        b3 := LaneBright(laneX3, scanY)
+        b4 := LaneBright(laneX4, scanY)
+        minD := Min(minD, b1), maxD := Max(maxD, b1)
+        minF := Min(minF, b2), maxF := Max(maxF, b2)
+        minJ := Min(minJ, b3), maxJ := Max(maxJ, b3)
+        minK := Min(minK, b4), maxK := Max(maxK, b4)
+        info := "CALIBRATION - no keys pressed`n"
+        info .= "focused:" focused "  active:" active "  flicker:" flicker "  thr:" BrightnessThreshold "`n"
+        info .= "D now:" b1 " min:" minD " max:" maxD "`n"
+        info .= "F now:" b2 " min:" minF " max:" maxF "`n"
+        info .= "J now:" b3 " min:" minJ " max:" maxJ "`n"
+        info .= "K now:" b4 " min:" minK " max:" maxK
+        ToolTip, %info%, centerX - 150, probeY - 130, 1
+        ToolTip, % "D " (b1 > BrightnessThreshold ? "HIT" : "-"), laneX1 - 10, scanY, 2
+        ToolTip, % "F " (b2 > BrightnessThreshold ? "HIT" : "-"), laneX2 - 10, scanY, 3
+        ToolTip, % "J " (b3 > BrightnessThreshold ? "HIT" : "-"), laneX3 - 10, scanY, 4
+        ToolTip, % "K " (b4 > BrightnessThreshold ? "HIT" : "-"), laneX4 - 10, scanY, 5
         Sleep, 30
     }
 }
@@ -738,7 +832,7 @@ WinGetClientPos(Hwnd) {
     return { X: x, Y: y, W: w, H: h }
 }
 
-; RunAuto() is added in Task 7.
+; RunAuto() and helpers (DoCast, ShowHud) are added in Task 7.
 RunAuto() {
     MsgBox, RunAuto not implemented yet. Set TestMode=1 to calibrate.
 }
@@ -746,40 +840,40 @@ RunAuto() {
 
 - [ ] **Step 2: Static self-review against this plan**
 
-Read the file and confirm: AHK v1.1 syntax (no v2 constructs); every Settings key has both an `IniWrite` default and an `IniRead` with fallback; `ComputeGeometry` declares `global` so its assignments are global; `RhythmActive` and `RunCalibration` reference only globals set by `ComputeGeometry`/Settings; calibration sends **no** keys or clicks. There is no automated test (AHK can't run on macOS) — this static review is the Mac-side gate.
+Confirm, reading the file: AHK v1.1 syntax only; `#MaxThreadsPerHotkey 1` present; `$p::` returns early when `running`; `$o::`/`$m::` both call `ReleaseAllKeys()` before reload/exit; every Settings key has an `IniWrite` default and an `IniRead` with fallback; `ComputeGeometry` floors every coordinate (incl. `gapX`); `LaneBright` samples three points; `PixelBright` honors `CaptureMode`; `RunCalibration` sends **no** keys/clicks and tracks min/max + flicker. AHK can't run on macOS, so this static review is the Mac-side gate.
 
 - [ ] **Step 3: Commit**
 
 ```bash
 cd /Users/sebastian.nystorm/Developer/thans-fisch-macro
 git add "Musical Rod/Fisch Musical Macro v1.0.ahk"
-git commit -m "Add musical-rod macro scaffolding with TestMode calibration overlay"
+git commit -m "Add musical-rod macro scaffolding with hardened TestMode diagnostic"
 ```
 
 - [ ] **Step 4: Windows verification procedure (manual, by the user)**
 
-Document for the user (also goes in the README in Task 8):
-1. Install AutoHotkey v1.1; download the `.ahk`; double-click to run (creates `Settings.ini`).
+1. Install AutoHotkey v1.1; download the `.ahk`; double-click to run (creates `Settings.ini`). Run Roblox in **borderless** fullscreen at a 16:9 resolution.
 2. Set `TestMode=1` in `Settings.ini`, press `O` to reload.
-3. In Roblox, open the musical-rod minigame (or stand anywhere), press `P`.
-4. Confirm: tooltips appear centered under the 4 lanes; `RhythmActive` reads `1` only when the minigame is up; when a falling note crosses a ring, that lane flips to `<HIT>`. Adjust `BrightnessThreshold`/`HitOffsetPixels` and press `O` to re-tune. No keys are pressed in this mode.
+3. Open the musical-rod minigame, press `P`.
+4. Confirm: the diagnostic tooltip shows `focused:1`; `active` reads `1` only while the minigame is up; each lane's `now` brightness sits low (~20-40) when empty and jumps high (~240+) when a note crosses the ring; `flicker` stays low. If `now` is stuck near 0 even with the game visible, set `CaptureMode=Alt RGB` (or `Slow RGB`), press `O`, retry — this is the D3D capture-mode fix. Tune `BrightnessThreshold` between the observed empty-`max` and note-`min`. No keys are pressed in this mode.
 
 ---
 
-### Task 7: Auto-play loop (detection, cast, state machine, HUD)
+### Task 7: Auto-play loop (detection, cast, hysteresis, safety)
 
 **Files:**
 - Modify: `Musical Rod/Fisch Musical Macro v1.0.ahk`
 
 **Interfaces:**
-- Consumes: all globals/functions from Task 6.
-- Produces: `RunAuto()` (replaces the stub), `DoCast()`, `PressKey(key)`, `ShowHud(status)`.
+- Consumes: all globals/functions from Task 6 (`LaneBright`, `RhythmActive`, `ReleaseAllKeys`, geometry globals, `running`, `hits`, `caught`, `downD/F/J/K`, settings).
+- Produces: `RunAuto()` (replaces the stub), `DoCast()`, `ShowHud(status)`.
 
-- [ ] **Step 1: Replace the `RunAuto()` stub with the real implementation and add helpers**
+- [ ] **Step 1: Replace the `RunAuto()` stub and add helpers**
 
-In `Musical Rod/Fisch Musical Macro v1.0.ahk`, replace the stub:
+In `Musical Rod/Fisch Musical Macro v1.0.ahk`, replace:
 
 ```ahk
+; RunAuto() and helpers (DoCast, ShowHud) are added in Task 7.
 RunAuto() {
     MsgBox, RunAuto not implemented yet. Set TestMode=1 to calibrate.
 }
@@ -796,120 +890,156 @@ DoCast() {
     Click, Up
 }
 
-PressKey(key) {
-    global KeyHoldMs
-    Send, % "{" key " down}"
-    if (KeyHoldMs > 0)
-        Sleep, %KeyHoldMs%
-    Send, % "{" key " up}"
-}
-
 ShowHud(status) {
-    global centerX, probeY, hits, caught, BrightnessThreshold
+    global centerX, probeY, hits, caught
     ToolTip, % "Musical Macro | " status " | hits:" hits " caught:" caught "  (O reload, M exit)", centerX - 170, probeY - 70, 1
 }
 
+; Full AFK loop. Safety rules (see plan Global Constraints):
+;  - focus guard: never press unless Roblox is foreground
+;  - arm-from-dark: a lane fires only after it has been seen dark this song
+;  - edge down/up, zero sleep in the hot loop; Sleep,-1 only pumps messages so
+;    O/M stay responsive without slowing the scan
+;  - InactiveConfirm consecutive inactive reads required before "song over"
 RunAuto() {
-    global
-    armedD := true
-    armedF := true
-    armedJ := true
-    armedK := true
+    global running, hits, caught
+    global laneX1, laneX2, laneX3, laneX4, scanY
+    global BrightnessThreshold, InactiveConfirm
+    global KeyD, KeyF, KeyJ, KeyK
+    global downD, downF, downJ, downK
+    global CastHoldMs, PostCatchWaitMs, RhythmAppearTimeoutMs
+    armedD := false, armedF := false, armedJ := false, armedK := false
     prevActive := false
+    inactiveCount := 0
     hudTimer := A_TickCount
     Loop {
-        if (!RhythmActive()) {
-            if (prevActive) {
-                caught += 1
-                prevActive := false
-                ShowHud("Caught")
-                Sleep, %PostCatchWaitMs%
+        if (!running)
+            break
+        ; --- focus guard: never type into another app ---
+        if (!WinActive("ahk_exe RobloxPlayerBeta.exe")) {
+            ReleaseAllKeys()
+            armedD := false, armedF := false, armedJ := false, armedK := false
+            ShowHud("Paused - Roblox not focused")
+            Sleep, 250
+            continue
+        }
+        if (RhythmActive()) {
+            inactiveCount := 0
+            if (!prevActive) {
+                ; song just started: require a dark baseline before pressing
+                armedD := false, armedF := false, armedJ := false, armedK := false
+                prevActive := true
+                ShowHud("Playing")
             }
-            ShowHud("Casting")
-            DoCast()
-            ShowHud("Waiting for bite")
-            waitStart := A_TickCount
-            started := false
-            Loop {
-                if (RhythmActive()) {
-                    started := true
-                    break
+            ; ---- HOT SCAN LOOP: no real sleep, edge down/up per lane ----
+            if (LaneBright(laneX1, scanY) > BrightnessThreshold) {
+                if (armedD and !downD) {
+                    Send, % "{" KeyD " down}"
+                    downD := true
+                    hits += 1
                 }
-                if (A_TickCount - waitStart > RhythmAppearTimeoutMs)
-                    break
-                Sleep, 50
+            } else {
+                armedD := true
+                if (downD) {
+                    Send, % "{" KeyD " up}"
+                    downD := false
+                }
             }
-            if (!started)
-                continue
-            armedD := true
-            armedF := true
-            armedJ := true
-            armedK := true
-            prevActive := true
-            ShowHud("Playing")
-        }
-        ; ---- HOT SCAN LOOP (no Sleep, no ToolTip except throttled) ----
-        if (PixelBright(laneX1, scanY) > BrightnessThreshold) {
-            if (armedD) {
-                PressKey(KeyD)
-                armedD := false
-                hits += 1
+            if (LaneBright(laneX2, scanY) > BrightnessThreshold) {
+                if (armedF and !downF) {
+                    Send, % "{" KeyF " down}"
+                    downF := true
+                    hits += 1
+                }
+            } else {
+                armedF := true
+                if (downF) {
+                    Send, % "{" KeyF " up}"
+                    downF := false
+                }
             }
+            if (LaneBright(laneX3, scanY) > BrightnessThreshold) {
+                if (armedJ and !downJ) {
+                    Send, % "{" KeyJ " down}"
+                    downJ := true
+                    hits += 1
+                }
+            } else {
+                armedJ := true
+                if (downJ) {
+                    Send, % "{" KeyJ " up}"
+                    downJ := false
+                }
+            }
+            if (LaneBright(laneX4, scanY) > BrightnessThreshold) {
+                if (armedK and !downK) {
+                    Send, % "{" KeyK " down}"
+                    downK := true
+                    hits += 1
+                }
+            } else {
+                armedK := true
+                if (downK) {
+                    Send, % "{" KeyK " up}"
+                    downK := false
+                }
+            }
+            Sleep, -1   ; pump messages (keeps O/M responsive); no real delay
         } else {
-            armedD := true
-        }
-        if (PixelBright(laneX2, scanY) > BrightnessThreshold) {
-            if (armedF) {
-                PressKey(KeyF)
-                armedF := false
-                hits += 1
+            inactiveCount += 1
+            if (inactiveCount >= InactiveConfirm) {
+                ReleaseAllKeys()
+                armedD := false, armedF := false, armedJ := false, armedK := false
+                if (prevActive) {
+                    caught += 1
+                    prevActive := false
+                    ShowHud("Caught")
+                    Sleep, %PostCatchWaitMs%
+                }
+                ShowHud("Casting")
+                DoCast()
+                ShowHud("Waiting for bite")
+                waitStart := A_TickCount
+                Loop {
+                    if (!running)
+                        break
+                    if (WinActive("ahk_exe RobloxPlayerBeta.exe") and RhythmActive())
+                        break
+                    if (A_TickCount - waitStart > RhythmAppearTimeoutMs)
+                        break
+                    Sleep, 50
+                }
+                inactiveCount := 0
+            } else {
+                Sleep, -1
             }
-        } else {
-            armedF := true
-        }
-        if (PixelBright(laneX3, scanY) > BrightnessThreshold) {
-            if (armedJ) {
-                PressKey(KeyJ)
-                armedJ := false
-                hits += 1
-            }
-        } else {
-            armedJ := true
-        }
-        if (PixelBright(laneX4, scanY) > BrightnessThreshold) {
-            if (armedK) {
-                PressKey(KeyK)
-                armedK := false
-                hits += 1
-            }
-        } else {
-            armedK := true
         }
         if (A_TickCount - hudTimer > 300) {
-            ShowHud("Playing")
+            ShowHud(prevActive ? "Playing" : "Idle")
             hudTimer := A_TickCount
         }
     }
+    ReleaseAllKeys()
 }
 ```
 
 - [ ] **Step 2: Static self-review against this plan**
 
-Confirm: the hot scan loop contains no `Sleep` and no `ToolTip` except the 300 ms-throttled `ShowHud`; each lane is edge-triggered (press only when `armed` and bright, re-arm when dark); `prevActive` true→false transition counts a catch and then re-casts; the wait-for-bite inner loop has the `RhythmAppearTimeoutMs` safety break so it can never soft-lock; `PressKey` uses down/hold/up with `KeyHoldMs`. AHK v1.1 syntax throughout.
+Confirm: the hot scan loop has no blocking `Sleep` (only `Sleep, -1`, the message-pump) and no `ToolTip` except the 300 ms-throttled `ShowHud`; each lane presses `{key down}` only when `armed and !down` and releases `{key up}` on the dark edge; `armed*` start `false` and are set true only on a dark read (arm-from-dark); the focus guard releases keys and skips pressing when Roblox isn't foreground; the song is declared over only after `InactiveConfirm` inactive reads; the wait-for-bite loop has the `RhythmAppearTimeoutMs` safety break and respects `running`; `ReleaseAllKeys()` runs on song end, focus loss, and loop exit. AHK v1.1 syntax throughout.
 
 - [ ] **Step 3: Commit**
 
 ```bash
 cd /Users/sebastian.nystorm/Developer/thans-fisch-macro
 git add "Musical Rod/Fisch Musical Macro v1.0.ahk"
-git commit -m "Implement musical-rod auto-play loop with edge-triggered hits"
+git commit -m "Implement hardened musical-rod auto-play loop"
 ```
 
 - [ ] **Step 4: Windows verification procedure (manual, by the user)**
 
-1. Set `TestMode=0`, press `O` to reload.
-2. Equip the musical rod, press `P`. The macro should cast, wait for the bite, and hit notes as they reach the rings; the HUD shows rising `hits`/`caught`.
-3. Tune for the fast end-game notes: if hits land late, reduce `HitOffsetPixels` (toward/below 0, scanning higher = fire earlier); if early, increase it. If presses don't register in-game, raise `KeyHoldMs` (e.g. 25–35). Press `O` after each change.
+1. Calibrate first via Task 6 (get clean dark/bright separation and `flicker` near 0). Then set `TestMode=0`, press `O`.
+2. Equip the musical rod, press `P`. The macro casts, waits for the bite, and hits notes as they reach the rings; the HUD shows rising `hits`/`caught`. Alt-tab away and confirm it pauses (no stray key presses); refocus Roblox and confirm it resumes.
+3. Tune the fast end-game notes with `HitOffsetPixels`: if hits land late, lower it (toward 0 / negative = scan higher = fire earlier); if early, raise it. If the song ever ends early or miscounts, raise `InactiveConfirm`. Press `O` after each change.
 
 ---
 
@@ -934,14 +1064,20 @@ For rods whose catch minigame is the 4-lane D/F/J/K rhythm game, use
 "Musical Rod/Fisch Musical Macro v1.0.ahk". It runs a full AFK loop:
 cast -> wait for the bite -> hit the notes -> re-cast.
 
+It only presses keys while Roblox is the focused window, so it will not type
+into other apps if you alt-tab away (it pauses and resumes on refocus).
+
 Setup:
 1. Install AutoHotkey v1.1. Put the .ahk in its own folder and run it
-   (creates Settings.ini). Roblox must be fullscreen at a 16:9 resolution,
-   Windows Display Scale 100%.
+   (creates Settings.ini). Run Roblox in BORDERLESS fullscreen at a 16:9
+   resolution, Windows Display Scale 100%. (Exclusive fullscreen can make the
+   screen-reader return black; if so see CaptureMode below.)
 2. First, calibrate: set TestMode=1 in Settings.ini, press O to reload, open
-   the minigame and press P. Tooltips under each lane show the brightness the
-   macro reads and flip to <HIT> when a note crosses the ring. No keys are
-   pressed in this mode. Adjust BrightnessThreshold / HitOffsetPixels, press O.
+   the minigame and press P. A diagnostic overlay shows, per lane, the live and
+   min/max brightness, plus focus/active state and a flicker counter. No keys
+   are pressed in this mode. You want each lane low (~20-40) when empty and high
+   (~240+) when a note crosses the ring, and flicker staying near 0. Tune
+   BrightnessThreshold to sit between empty-max and note-min, then press O.
 3. Run: set TestMode=0, press O, equip the rod, press P. P = start,
    O = reload settings, M = exit.
 
@@ -951,7 +1087,11 @@ Key settings (Settings.ini):
   later. Tune this first.
 - BrightnessThreshold - dark/bright cutoff for "a note is on the ring" (default
   110; empty ring ~30, note ~250).
-- KeyHoldMs - how long each key is held (raise to 25-35 if the game misses presses).
+- CaptureMode - how the screen is read (default RGB). If calibration shows the
+  lanes stuck near 0 while the game is visible, set this to "Alt RGB" or
+  "Slow RGB" and press O.
+- InactiveConfirm - how many consecutive "minigame gone" reads end the song
+  (default 6). Raise it if a song ends early or a catch is miscounted.
 - CastHoldMs / PostCatchWaitMs / RhythmAppearTimeoutMs - cast charge time, pause
   after a catch, and how long to wait for a bite before re-casting.
 - Geometry section - lane fractions / ring position; only change for non-16:9
