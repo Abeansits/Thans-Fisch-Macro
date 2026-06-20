@@ -74,3 +74,30 @@ def find_rings(img, region_top=0.55, dark_interior_max=50):
             rings.append(Ring(cx, cy, max(w, h) // 2, color))
     rings.sort(key=lambda r: r.cx)
     return rings
+
+
+def lane_geometry(img):
+    W, H = img.size
+    rings = find_rings(img)
+    geo = {
+        "width": W,
+        "height": H,
+        "n_rings": len(rings),
+        "lane_fx": [round(r.cx / W, 4) for r in rings],
+        "ring_fy": round(sum(r.cy for r in rings) / len(rings) / H, 4) if rings else None,
+        "radius_fy": round(sum(r.r for r in rings) / len(rings) / H, 4) if rings else None,
+        "ring_colors": [r.color for r in rings],
+    }
+    return geo
+
+
+def emit_constants(geo):
+    keys = ["D", "F", "J", "K"]
+    lines = []
+    for k, fx in zip(keys, geo["lane_fx"]):
+        lines.append("Lane%sFrac=%s" % (k, fx))
+    lines.append("RingFracY=%s" % geo["ring_fy"])
+    lines.append("RadiusFracY=%s" % geo["radius_fy"])
+    lines.append("BrightnessThreshold=110")
+    lines.append("HitOffsetPixels=15")
+    return "\n".join(lines)

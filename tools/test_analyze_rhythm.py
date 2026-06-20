@@ -48,3 +48,21 @@ def test_empty_ring_interior_is_dark():
     pix = img.load()
     for r in ar.find_rings(img):
         assert ar.interior_brightness(pix, r.cx, r.cy) < 50
+
+
+def test_lane_fractions_match_measured():
+    geo = ar.lane_geometry(Image.open(CAVE).convert("RGB"))
+    assert geo["n_rings"] == 4
+    for got, exp in zip(geo["lane_fx"], [0.3512, 0.4502, 0.5492, 0.6480]):
+        assert abs(got - exp) < 0.01
+    assert abs(geo["ring_fy"] - 0.7653) < 0.01
+    assert abs(geo["radius_fy"] - 0.0486) < 0.01
+
+
+def test_emit_constants_has_required_keys():
+    geo = ar.lane_geometry(Image.open(CAVE).convert("RGB"))
+    out = ar.emit_constants(geo)
+    for key in ("LaneDFrac=", "LaneFFrac=", "LaneJFrac=", "LaneKFrac=",
+                "RingFracY=", "RadiusFracY=", "BrightnessThreshold=110",
+                "HitOffsetPixels=15"):
+        assert key in out
