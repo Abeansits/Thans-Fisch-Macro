@@ -249,7 +249,142 @@ WinGetClientPos(Hwnd) {
     return { X: x, Y: y, W: w, H: h }
 }
 
-; RunAuto() and helpers (DoCast, ShowHud) are added in Task 7.
+DoCast() {
+    global centerX, centerY, CastHoldMs
+    MouseMove, centerX, centerY
+    Click, Down
+    Sleep, %CastHoldMs%
+    Click, Up
+}
+
+ShowHud(status) {
+    global centerX, probeY, hits, caught
+    ToolTip, % "Musical Macro | " status " | hits:" hits " caught:" caught "  (O reload, M exit)", centerX - 170, probeY - 70, 1
+}
+
+; Full AFK loop. Safety rules (see plan Global Constraints):
+;  - focus guard: never press unless Roblox is foreground
+;  - arm-from-dark: a lane fires only after it has been seen dark this song
+;  - edge down/up, zero sleep in the hot loop; Sleep,-1 only pumps messages so
+;    O/M stay responsive without slowing the scan
+;  - InactiveConfirm consecutive inactive reads required before "song over"
 RunAuto() {
-    MsgBox, RunAuto not implemented yet. Set TestMode=1 to calibrate.
+    global running, hits, caught
+    global laneX1, laneX2, laneX3, laneX4, scanY
+    global BrightnessThreshold, InactiveConfirm
+    global KeyD, KeyF, KeyJ, KeyK
+    global downD, downF, downJ, downK
+    global CastHoldMs, PostCatchWaitMs, RhythmAppearTimeoutMs
+    armedD := false, armedF := false, armedJ := false, armedK := false
+    prevActive := false
+    inactiveCount := 0
+    hudTimer := A_TickCount
+    Loop {
+        if (!running)
+            break
+        ; --- focus guard: never type into another app ---
+        if (!WinActive("ahk_exe RobloxPlayerBeta.exe")) {
+            ReleaseAllKeys()
+            armedD := false, armedF := false, armedJ := false, armedK := false
+            ShowHud("Paused - Roblox not focused")
+            Sleep, 250
+            continue
+        }
+        if (RhythmActive()) {
+            inactiveCount := 0
+            if (!prevActive) {
+                ; song just started: require a dark baseline before pressing
+                armedD := false, armedF := false, armedJ := false, armedK := false
+                prevActive := true
+                ShowHud("Playing")
+            }
+            ; ---- HOT SCAN LOOP: no real sleep, edge down/up per lane ----
+            if (LaneBright(laneX1, scanY) > BrightnessThreshold) {
+                if (armedD and !downD) {
+                    Send, % "{" KeyD " down}"
+                    downD := true
+                    hits += 1
+                }
+            } else {
+                armedD := true
+                if (downD) {
+                    Send, % "{" KeyD " up}"
+                    downD := false
+                }
+            }
+            if (LaneBright(laneX2, scanY) > BrightnessThreshold) {
+                if (armedF and !downF) {
+                    Send, % "{" KeyF " down}"
+                    downF := true
+                    hits += 1
+                }
+            } else {
+                armedF := true
+                if (downF) {
+                    Send, % "{" KeyF " up}"
+                    downF := false
+                }
+            }
+            if (LaneBright(laneX3, scanY) > BrightnessThreshold) {
+                if (armedJ and !downJ) {
+                    Send, % "{" KeyJ " down}"
+                    downJ := true
+                    hits += 1
+                }
+            } else {
+                armedJ := true
+                if (downJ) {
+                    Send, % "{" KeyJ " up}"
+                    downJ := false
+                }
+            }
+            if (LaneBright(laneX4, scanY) > BrightnessThreshold) {
+                if (armedK and !downK) {
+                    Send, % "{" KeyK " down}"
+                    downK := true
+                    hits += 1
+                }
+            } else {
+                armedK := true
+                if (downK) {
+                    Send, % "{" KeyK " up}"
+                    downK := false
+                }
+            }
+            Sleep, -1   ; pump messages (keeps O/M responsive); no real delay
+        } else {
+            inactiveCount += 1
+            if (inactiveCount >= InactiveConfirm) {
+                ReleaseAllKeys()
+                armedD := false, armedF := false, armedJ := false, armedK := false
+                if (prevActive) {
+                    caught += 1
+                    prevActive := false
+                    ShowHud("Caught")
+                    Sleep, %PostCatchWaitMs%
+                }
+                ShowHud("Casting")
+                DoCast()
+                ShowHud("Waiting for bite")
+                waitStart := A_TickCount
+                Loop {
+                    if (!running)
+                        break
+                    if (WinActive("ahk_exe RobloxPlayerBeta.exe") and RhythmActive())
+                        break
+                    if (A_TickCount - waitStart > RhythmAppearTimeoutMs)
+                        break
+                    Sleep, 50
+                }
+                inactiveCount := 0
+            } else {
+                Sleep, -1
+            }
+        }
+        if (A_TickCount - hudTimer > 300) {
+            ShowHud(prevActive ? "Playing" : "Idle")
+            hudTimer := A_TickCount
+        }
+    }
+    ReleaseAllKeys()
 }
