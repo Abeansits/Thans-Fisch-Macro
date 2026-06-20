@@ -18,3 +18,33 @@ def test_brightness_is_max_channel():
 
 def test_colorfulness_is_range():
     assert ar.colorfulness((10, 20, 35)) == 25
+
+
+def test_find_four_rings_in_cave():
+    rings = ar.find_rings(Image.open(CAVE).convert("RGB"))
+    assert len(rings) == 4
+
+
+def test_find_four_rings_in_swamp():
+    rings = ar.find_rings(Image.open(SWAMP).convert("RGB"))
+    assert len(rings) == 4
+
+
+def test_stop_tolerates_note_occluding_a_ring():
+    # In stop.png a note sits on the F ring, so its interior is filled and
+    # that ring is not a hollow ring -> at least the other three are found.
+    rings = ar.find_rings(Image.open(STOP).convert("RGB"))
+    assert len(rings) >= 3
+
+
+def test_rings_sorted_left_to_right():
+    rings = ar.find_rings(Image.open(CAVE).convert("RGB"))
+    xs = [r.cx for r in rings]
+    assert xs == sorted(xs)
+
+
+def test_empty_ring_interior_is_dark():
+    img = Image.open(CAVE).convert("RGB")
+    pix = img.load()
+    for r in ar.find_rings(img):
+        assert ar.interior_brightness(pix, r.cx, r.cy) < 50

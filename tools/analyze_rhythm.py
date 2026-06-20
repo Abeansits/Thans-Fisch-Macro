@@ -18,3 +18,59 @@ def brightness(rgb):
 
 def colorfulness(rgb):
     return max(rgb[0], rgb[1], rgb[2]) - min(rgb[0], rgb[1], rgb[2])
+
+
+def _colorful_bright(p, cf=55, br=90):
+    return colorfulness(p) > cf and brightness(p) > br
+
+
+def interior_brightness(pix, cx, cy, box=12):
+    total = 0
+    n = 0
+    for y in range(cy - box, cy + box + 1):
+        for x in range(cx - box, cx + box + 1):
+            total += brightness(pix[x, y])
+            n += 1
+    return total / n
+
+
+def find_rings(img, region_top=0.55, dark_interior_max=50):
+    """Connected-component scan of the bottom region for ring-sized blobs of
+    bright, colorful pixels; keep only those with a DARK interior (hollow
+    target rings). Filled notes have bright interiors and are rejected."""
+    W, H = img.size
+    pix = img.load()
+    y_start = int(H * region_top)
+    step = 2
+    seen = set()
+    rings = []
+    for sy in range(y_start, H, step):
+        for sx in range(0, W, step):
+            if (sx, sy) in seen or not _colorful_bright(pix[sx, sy]):
+                continue
+            q = deque([(sx, sy)])
+            seen.add((sx, sy))
+            xs, ys = [], []
+            while q:
+                x, y = q.popleft()
+                xs.append(x)
+                ys.append(y)
+                for dx, dy in ((step, 0), (-step, 0), (0, step), (0, -step)):
+                    nx, ny = x + dx, y + dy
+                    if (0 <= nx < W and y_start <= ny < H
+                            and (nx, ny) not in seen
+                            and _colorful_bright(pix[nx, ny])):
+                        seen.add((nx, ny))
+                        q.append((nx, ny))
+            w = max(xs) - min(xs)
+            h = max(ys) - min(ys)
+            if not (90 <= w <= 200 and 90 <= h <= 200):
+                continue  # wrong size: clipped note, merged notes, speck
+            cx = (min(xs) + max(xs)) // 2
+            cy = (min(ys) + max(ys)) // 2
+            if interior_brightness(pix, cx, cy) > dark_interior_max:
+                continue  # filled note, not a hollow ring
+            color = pix[cx, max(0, cy - h // 2)]  # bright stroke at ring top
+            rings.append(Ring(cx, cy, max(w, h) // 2, color))
+    rings.sort(key=lambda r: r.cx)
+    return rings
