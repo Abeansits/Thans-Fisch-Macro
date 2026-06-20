@@ -106,3 +106,42 @@ def emit_constants(geo):
 def note_present(img, ring, hit_offset_px=15, box=12, threshold=110):
     pix = img.load()
     return interior_brightness(pix, ring.cx, ring.cy + hit_offset_px, box) > threshold
+
+
+def annotate(img, hit_offset_px=15, box=12):
+    out = img.copy()
+    d = ImageDraw.Draw(out)
+    for r in find_rings(out):
+        sy = r.cy + hit_offset_px
+        d.rectangle([r.cx - box, sy - box, r.cx + box, sy + box],
+                    outline=(255, 255, 0), width=3)
+        d.ellipse([r.cx - 5, r.cy - r.r - 5, r.cx + 5, r.cy - r.r + 5],
+                  fill=(255, 0, 0))
+    return out
+
+
+def main(argv=None):
+    import argparse
+    import os
+    ap = argparse.ArgumentParser(description="Analyze Fisch rhythm screenshots")
+    ap.add_argument("shots", nargs="+", help="screenshot paths")
+    ap.add_argument("--out", default=".", help="output dir for overlays")
+    args = ap.parse_args(argv)
+    for shot in args.shots:
+        img = Image.open(shot).convert("RGB")
+        geo = lane_geometry(img)
+        name = os.path.basename(shot)
+        print("\n# %s  (rings found: %d)" % (name, geo["n_rings"]))
+        if geo["n_rings"] != 4:
+            print("# WARNING: expected 4 rings, found %d "
+                  "(a note may be covering a ring; use a clean shot)"
+                  % geo["n_rings"])
+        print(emit_constants(geo))
+        op = os.path.join(args.out, "overlay_" + name)
+        annotate(img).save(op)
+        print("# wrote %s" % op)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -82,3 +82,16 @@ def test_note_detected_when_interior_filled():
     sy = r.cy + 15
     d.ellipse([r.cx - 45, sy - 45, r.cx + 45, sy + 45], fill=(120, 240, 245))
     assert ar.note_present(img, r) is True
+
+
+def test_annotate_preserves_size():
+    img = Image.open(CAVE).convert("RGB")
+    out = ar.annotate(img)
+    assert out.size == img.size
+
+
+def test_main_writes_overlays(tmp_path):
+    rc = ar.main([CAVE, SWAMP, "--out", str(tmp_path)])
+    assert rc == 0
+    assert (tmp_path / "overlay_cave.png").exists()
+    assert (tmp_path / "overlay_swamp.png").exists()
