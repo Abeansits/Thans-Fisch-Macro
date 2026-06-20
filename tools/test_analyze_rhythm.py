@@ -66,3 +66,19 @@ def test_emit_constants_has_required_keys():
                 "RingFracY=", "RadiusFracY=", "BrightnessThreshold=110",
                 "HitOffsetPixels=15"):
         assert key in out
+
+
+def test_no_note_on_empty_rings():
+    img = Image.open(CAVE).convert("RGB")
+    for r in ar.find_rings(img):
+        assert ar.note_present(img, r) is False
+
+
+def test_note_detected_when_interior_filled():
+    img = Image.open(CAVE).convert("RGB")
+    rings = ar.find_rings(img)
+    r = rings[0]
+    d = ImageDraw.Draw(img)
+    sy = r.cy + 15
+    d.ellipse([r.cx - 45, sy - 45, r.cx + 45, sy + 45], fill=(120, 240, 245))
+    assert ar.note_present(img, r) is True

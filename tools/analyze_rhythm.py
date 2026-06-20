@@ -101,3 +101,8 @@ def emit_constants(geo):
     lines.append("BrightnessThreshold=110")
     lines.append("HitOffsetPixels=15")
     return "\n".join(lines)
+
+
+def note_present(img, ring, hit_offset_px=15, box=12, threshold=110):
+    pix = img.load()
+    return interior_brightness(pix, ring.cx, ring.cy + hit_offset_px, box) > threshold
