@@ -20,10 +20,10 @@ KeyF := "f"
 KeyJ := "j"
 KeyK := "k"
 TestMode := 0
-LaneDFrac := 0.3512
-LaneFFrac := 0.4502
+LaneDFrac := 0.3516
+LaneFFrac := 0.4504
 LaneJFrac := 0.5492
-LaneKFrac := 0.6480
+LaneKFrac := 0.6484
 RingFracY := 0.7653
 RadiusFracY := 0.0486
 

@@ -53,10 +53,23 @@ def test_empty_ring_interior_is_dark():
 def test_lane_fractions_match_measured():
     geo = ar.lane_geometry(Image.open(CAVE).convert("RGB"))
     assert geo["n_rings"] == 4
-    for got, exp in zip(geo["lane_fx"], [0.3512, 0.4502, 0.5492, 0.6480]):
-        assert abs(got - exp) < 0.01
+    for got, exp in zip(geo["lane_fx"], [0.3516, 0.4504, 0.5492, 0.6484]):
+        assert abs(got - exp) < 0.002
     assert abs(geo["ring_fy"] - 0.7653) < 0.01
     assert abs(geo["radius_fy"] - 0.0486) < 0.01
+
+
+def test_emit_constants_omits_lanes_when_not_four_rings():
+    # stop.png has a note covering a ring, so only 3 rings are detected.
+    # The tool must NOT emit per-lane fractions (they'd be mislabeled) but
+    # must still emit the resolution-independent ring constants.
+    geo = ar.lane_geometry(Image.open(STOP).convert("RGB"))
+    assert geo["n_rings"] == 3
+    assert len(geo["lane_fx"]) == 3
+    out = ar.emit_constants(geo)
+    for key in ("LaneDFrac=", "LaneFFrac=", "LaneJFrac=", "LaneKFrac="):
+        assert key not in out
+    assert "RingFracY=" in out
 
 
 def test_emit_constants_has_required_keys():

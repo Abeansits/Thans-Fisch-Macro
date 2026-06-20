@@ -98,7 +98,10 @@ Key settings (Settings.ini):
 - CastHoldMs / PostCatchWaitMs / RhythmAppearTimeoutMs - cast charge time, pause
   after a catch, and how long to wait for a bite before re-casting.
 - Geometry section - lane fractions / ring position; only change for non-16:9
-  layouts. Regenerate with tools/analyze_rhythm.py from a screenshot.
+  layouts. Regenerate with tools/analyze_rhythm.py from a screenshot. The
+  screenshot MUST show all four target rings EMPTY (no notes covering any
+  ring), otherwise the emitted lane fractions will be wrong or incomplete (the
+  tool only emits lane fractions when it detects exactly 4 clean rings).
 
 Dev note (Mac): tools/analyze_rhythm.py validates lane geometry and note
 detection against screenshots without the game, and prints the Settings values

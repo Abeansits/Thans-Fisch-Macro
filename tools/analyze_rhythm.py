@@ -94,8 +94,12 @@ def lane_geometry(img):
 def emit_constants(geo):
     keys = ["D", "F", "J", "K"]
     lines = []
-    for k, fx in zip(keys, geo["lane_fx"]):
-        lines.append("Lane%sFrac=%s" % (k, fx))
+    if geo["n_rings"] == 4:
+        for k, fx in zip(keys, geo["lane_fx"]):
+            lines.append("Lane%sFrac=%s" % (k, fx))
+    else:
+        lines.append("# Lane fractions unavailable: need exactly 4 clean "
+                     "(empty) rings, found %d" % geo["n_rings"])
     lines.append("RingFracY=%s" % geo["ring_fy"])
     lines.append("RadiusFracY=%s" % geo["radius_fy"])
     lines.append("BrightnessThreshold=110")
